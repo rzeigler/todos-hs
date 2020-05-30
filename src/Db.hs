@@ -1,9 +1,9 @@
 {-# LANGUAGE OverloadedStrings, QuasiQuotes, TupleSections, GeneralizedNewtypeDeriving, RankNTypes  #-}
 module Db
   ( Todo(..)
-  , SavedTodo
-  , Handler
-  , runHandler
+  , SavedTodo(..)
+  , Db
+  , runDb
   , withInitializedDb
   , getAllTodos
   , getCompleteTodos
@@ -11,6 +11,7 @@ module Db
   , createTodo
   , deleteTodo
   , getTodo
+  , putTodo
   , savedTodoId
   , savedTodoData
   )
@@ -38,6 +39,8 @@ import           Database.SQLite.Simple         ( Query
                                                 , toRow
                                                 )
 import           Database.SQLite.Simple.QQ      ( sql )
+import           Data.Void                      ( Void )
+
 
 -- Queries live here
 
@@ -56,7 +59,6 @@ createTodoTable = [sql|
         )
 |]
 
-getAll = [sql|SELECT id, name, desc, created_at, completed_at FROM todos|]
 
 getPending =
   [sql|SELECT id, name, desc, created_at, completed_at FROM todos WHERE completed_at IS NULL|]
@@ -70,6 +72,9 @@ setIncomplete = [sql|UPDATE todos SET completed_at = NULL where id = ?|]
 
 create =
   [sql|INSERT INTO todos(name, desc, created_at, completed_at) VALUES(?, ?, ?, ?)|]
+
+update =
+  [sql|UPDATE todos SET name=?, desc=?, created_at=?, completed_at=? WHERE id = ?|]
 
 delete = [sql|DELETE FROM todos WHERE id = ?|]
 
@@ -94,14 +99,14 @@ initialize conn = execute_ conn createTodoTable
 lazyInitialize :: Connection -> IO ()
 lazyInitialize conn = unlessM (isInitialized conn) (initialize conn)
 
-
 -- Get around error regarding impredicative polymorphism
-newtype Handler = Handler { runHandler :: forall a . (Connection -> IO a) -> IO a }
+newtype Db = Db { runDb :: forall a . (Connection -> IO a) -> IO a }
 
-withInitializedDb :: Text -> IO Handler
-withInitializedDb path = fmap (const (Handler withPathConn))
-  $ withConnection pathStr lazyInitialize
+withInitializedDb :: Text -> IO Db
+withInitializedDb path = const (Db withPathConn)
+  <$> withPathConn lazyInitialize
  where
+  asHandler    = const (Db withPathConn)
   pathStr      = unpack path
   withPathConn = withConnection pathStr
 
@@ -117,7 +122,6 @@ instance FromRow Todo where
 instance ToRow Todo where
   toRow t = toRow (todoName t, todoDesc t, todoCreated t, todoCompleted t)
 
-
 newtype SavedTodo = SavedTodo (Int, Todo)
         deriving (Eq, Show)
 
@@ -130,13 +134,21 @@ savedTodoData (SavedTodo (_, d)) = d
 instance FromRow SavedTodo where
   fromRow = fmap SavedTodo ((,) <$> field <*> fromRow)
 
-getAllTodos :: Connection -> IO [Todo]
+newtype UpdateTodo = UpdateTodo SavedTodo
+
+instance ToRow UpdateTodo where
+  -- Do this backwards
+  toRow (UpdateTodo (SavedTodo (i, t))) = toRow t ++ toRow (Only i)
+
+getAll = [sql|SELECT id, name, desc, created_at, completed_at FROM todos|]
+
+getAllTodos :: Connection -> IO [SavedTodo]
 getAllTodos conn = query_ conn getAll
 
-getPendingTodos :: Connection -> IO [Todo]
+getPendingTodos :: Connection -> IO [SavedTodo]
 getPendingTodos conn = query_ conn getPending
 
-getCompleteTodos :: Connection -> IO [Todo]
+getCompleteTodos :: Connection -> IO [SavedTodo]
 getCompleteTodos conn = query_ conn getComplete
 
 completeTodoAt :: UTCTime -> Int -> Connection -> IO ()
@@ -152,6 +164,10 @@ createTodo todo conn = execute conn create todo
   unOnlyInt :: Only Int -> Int
   unOnlyInt = unOnly
   reloaded  = (SavedTodo . (, todo) . unOnlyInt . head)
+
+putTodo :: Int -> Todo -> Connection -> IO (Maybe SavedTodo)
+putTodo id todo conn =
+  execute conn update (UpdateTodo (SavedTodo (id, todo))) >> getTodo id conn
 
 deleteTodo :: Int -> Connection -> IO ()
 deleteTodo i conn = execute conn delete (Only i)

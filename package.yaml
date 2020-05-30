@@ -25,9 +25,13 @@ dependencies:
 - transformers
 - sqlite-simple
 - servant
+- servant-server
+- wai
+- warp
 - text
 - time
 - extra
+- aeson
 
 library:
   source-dirs: src
