@@ -5,14 +5,13 @@ module Api
   )
 where
 
+import Data.Maybe (fromMaybe)
 import Control.Monad.Except
 import           Control.Monad.IO.Class
 import           Data.Text                      ( Text )
 import           Data.Aeson
 import qualified Db                            as D
 import           Db                             ( todoName
-                                                , todoDesc
-                                                , todoCreated
                                                 , todoCompleted
                                                 )
 
@@ -27,20 +26,16 @@ instance FromJSON ApiTodo where
     ApiTodo
     (   D.Todo
     <$> (v .: "name")
-    <*> (v .: "description")
-    <*> (v .: "created")
-    <*> (v .:? "completed")
+    <*> fmap (fromMaybe False) (v .:? "completed")
     )
 
 newtype ApiSavedTodo = ApiSavedTodo D.SavedTodo
 
 instance ToJSON ApiSavedTodo where
-  toJSON (ApiSavedTodo (D.SavedTodo (id, (D.Todo { todoName, todoDesc, todoCreated, todoCompleted }))))
+  toJSON (ApiSavedTodo (D.SavedTodo (id, D.Todo { todoName, todoCompleted })))
     = object
       [ "id" .= id
       , "name" .= todoName
-      , "description" .= todoDesc
-      , "created" .= todoCreated
       , "completed" .= todoCompleted
       ]
 
@@ -87,8 +82,6 @@ server db = liftIO . getTodos
 maybeTo404 :: Maybe a -> Either ServerError a
 maybeTo404 (Just a) = Right a
 maybeTo404 Nothing = Left err404
-    
-
 
 app :: D.Db -> Application
 app db = serve todoAPI (server db)
